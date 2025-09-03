@@ -1,6 +1,8 @@
 use iced::{
+    Alignment::Center,
     Application, Theme,
     advanced::{graphics::text::cosmic_text::Edit, widget::Text},
+    alignment::Horizontal::Left,
     highlighter, settings,
     widget::{Container, center, mouse_area, opaque, pick_list, stack},
 };
@@ -199,27 +201,34 @@ fn view(editor: &Editor) -> Element<Messages> {
         row![status, horizontal_space(), position]
     };
 
-    let settings_container: Container<'_, Messages, iced::Theme, Renderer> = container(column![
-        text("Settings").size(20),
-        row![
-            text("Code Highlight Theme:"),
-            pick_list(
-                highlighter::Theme::ALL,
-                Some(editor.highlight_theme),
-                Messages::HighlighterThemeSelected
-            )
+    let settings_container: Container<'_, Messages, iced::Theme, Renderer> = container(
+        column![
+            text("Settings").size(20),
+            row![
+                column![text("Code Highlight Theme:"), text("Editor Theme:")]
+                    .width(225)
+                    .spacing(10)
+                    .align_x(Left),
+                column![
+                    pick_list(
+                        highlighter::Theme::ALL,
+                        Some(editor.highlight_theme),
+                        Messages::HighlighterThemeSelected
+                    ),
+                    pick_list(
+                        iced::Theme::ALL,
+                        Some(editor.editor_theme.clone()),
+                        Messages::EditorThemeSelected
+                    )
+                ]
+                .width(150)
+                .spacing(10)
+                .align_x(Left)
+            ],
         ]
-        .spacing(5),
-        row![
-            text("Editor Theme:"),
-            pick_list(
-                iced::Theme::ALL,
-                Some(editor.editor_theme.clone()),
-                Messages::EditorThemeSelected
-            )
-        ]
-        .spacing(5),
-    ]);
+        .align_x(Center)
+        .spacing(10),
+    );
 
     let contents: Container<'_, Messages, iced::Theme, Renderer> =
         container(column![controls, input, status_bar].spacing(5))
