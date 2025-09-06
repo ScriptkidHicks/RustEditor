@@ -25,37 +25,43 @@ use std::{ffi, io};
 
 struct Tab {
     file_name: String,
-    path: Option<PathBuf>,
+    opt_path: Option<PathBuf>,
     content: text_editor::Content,
     has_been_edited: bool,
     is_new: bool,
 }
 
+impl Tab {
+    fn file_saved(&mut self) {
+        self.has_been_edited = false;
+        self.is_new = false;
+    }
+
+    fn perform_edit(&mut self, action: text_editor::Action) {
+        self.content.perform(action);
+        self.has_been_edited = true;
+    }
+}
+
 struct Editor {
-    current_tab: Option<Tab>,
-    open_tabs: Vec<Tab>,
     current_tab_path: Option<PathBuf>,
-    content: text_editor::Content,
+    open_tabs: Vec<Tab>,
     editor_theme: iced::Theme,
     highlight_theme: highlighter::Theme,
     font: Font,
     current_error: Option<EditorError>,
-    has_been_edited: bool,
     show_settings: bool,
 }
 
 impl Default for Editor {
     fn default() -> Self {
         Editor {
-            current_tab: None,
-            open_tabs: Vec::new(),
             current_tab_path: None,
-            content: Content::with_text(""),
+            open_tabs: Vec::new(),
             editor_theme: iced::Theme::CatppuccinFrappe,
             highlight_theme: highlighter::Theme::SolarizedDark,
             font: Font::MONOSPACE,
             current_error: None,
-            has_been_edited: false,
             show_settings: false,
         }
     }
@@ -64,6 +70,63 @@ impl Default for Editor {
 impl Editor {
     fn theme(&self) -> iced::Theme {
         self.editor_theme.clone()
+    }
+
+    fn file_already_open(&self, file_path: PathBuf) -> bool {
+        for tab in self.open_tabs.iter() {
+            if tab
+                .opt_path
+                .as_ref()
+                .is_some_and(|tab_path| *tab_path == file_path)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    //This function attempts to update the tab as saved. Failing to find it returns false.
+    fn file_saved(&mut self, file_path: PathBuf) -> bool {
+        return false;
+    }
+
+    fn get_current_tab(&mut self) -> Option<&mut Tab> {
+        match self.current_tab_path.clone() {
+            Some(current_tab_path) => {
+                for tab in self.open_tabs.iter_mut() {
+                    if tab
+                        .opt_path
+                        .as_ref()
+                        .is_some_and(|tab_path| *tab_path == current_tab_path)
+                    {
+                        return Some(tab);
+                    }
+                }
+            }
+            None => return None,
+        }
+
+        return None;
+    }
+
+    fn open_tab(
+        &mut self,
+        file_path: PathBuf,
+        new_content: Arc<String>,
+        new_file_name: String,
+        is_new_file: bool,
+    ) {
+        let new_tab = Tab {
+            is_new: is_new_file,
+            opt_path: Some(file_path.clone()),
+            content: Content::with_text(&new_content),
+            file_name: new_file_name,
+            has_been_edited: is_new_file,
+        };
+        self.open_tabs.push(new_tab);
+        self.current_tab_path = Some(file_path.clone());
+        self.current_error = None;
     }
 }
 
@@ -78,7 +141,7 @@ enum DropdownOptions {
 enum Messages {
     Edit(text_editor::Action),
     MenuOption(DropdownOptions),
-    FileOpened(Result<(PathBuf, Arc<String>), EditorError>),
+    FileOpened(Result<(PathBuf, Arc<String>, String, bool), EditorError>),
     FileSaved(Result<PathBuf, EditorError>),
     HighlighterThemeSelected(highlighter::Theme),
     EditorThemeSelected(iced::Theme),
@@ -92,62 +155,78 @@ enum EditorError {
     FailedToSave,
 }
 
-fn update(state: &mut Editor, message: Messages) -> Task<Messages> {
+fn update(editor: &mut Editor, message: Messages) -> Task<Messages> {
     match message {
         Messages::Edit(edit_action) => {
-            state.content.perform(edit_action);
-            state.current_error = None;
-            state.has_been_edited = true;
+            match editor.get_current_tab() {
+                Some(tab) => {
+                    tab.perform_edit(edit_action);
+                    editor.current_error = None;
+                }
+                None => {
+                    //this is fine, we're not really worried about it not having a current tab
+                }
+            }
             Task::none()
         }
         Messages::EditorThemeSelected(new_editor_theme) => {
-            state.editor_theme = new_editor_theme;
+            editor.editor_theme = new_editor_theme;
             Task::none()
         }
         Messages::ShowModal(should_show) => {
-            state.show_settings = should_show;
+            editor.show_settings = should_show;
             Task::none()
         }
-        Messages::MenuOption(dropdown_option) => handle_file_option(state, dropdown_option),
+        Messages::MenuOption(dropdown_option) => handle_file_option(editor, dropdown_option),
         Messages::FileOpened(opening_result) => match opening_result {
-            Ok((path_buf, new_content)) => {
-                state.content = Content::with_text(&new_content);
-                state.current_tab_path = Some(path_buf);
-                state.current_error = None;
-                state.has_been_edited = false;
-                Task::none()
-            }
+            Ok((path_buf, new_content, new_file_name, is_new_file)) => Task::none(),
             Err(editor_error) => {
-                state.current_error = Some(editor_error);
+                editor.current_error = Some(editor_error);
                 Task::none()
             }
         },
         Messages::FileSaved(result) => match result {
-            Ok(_) => {
-                state.has_been_edited = false;
+            Ok(file_path) => {
+                match editor.file_saved(file_path) {
+                    true => {
+                        //fine and expected. Good even.
+                    }
+                    false => {
+                        // TODO: this is definitely an error, and we have got to figure out how to handle it
+                    }
+                }
                 Task::none()
             }
             Err(editor_error) => {
-                state.current_error = Some(editor_error);
+                editor.current_error = Some(editor_error);
                 Task::none()
             }
         },
         Messages::HighlighterThemeSelected(file_theme) => {
-            state.highlight_theme = file_theme;
+            editor.highlight_theme = file_theme;
             Task::none()
         }
     }
 }
 
-fn handle_file_option(state: &mut Editor, file_option: DropdownOptions) -> Task<Messages> {
+fn handle_file_option(editor: &mut Editor, file_option: DropdownOptions) -> Task<Messages> {
     match file_option {
         DropdownOptions::Open => Task::perform(pick_file(), Messages::FileOpened),
-        DropdownOptions::Save => Task::perform(
-            save_file(state.current_tab_path.clone(), state.content.text()),
-            Messages::FileSaved,
-        ),
+        DropdownOptions::Save => {
+            match editor.get_current_tab() {
+                Some(tab) => Task::perform(
+                    save_file(tab.opt_path.clone(), tab.content.text()),
+                    Messages::FileSaved,
+                ),
+                None => {
+                    //trying to save without a tab open isn't a sin
+                    Task::none()
+                }
+            }
+        }
         DropdownOptions::New => {
-            state.content = Content::with_text("");
+            editor.open_tab(file_path, new_content, new_file_name, is_new_file);
+            state.content = ;
             state.current_tab_path = None;
             Task::none()
         }
@@ -191,7 +270,7 @@ fn view(editor: &Editor) -> Element<Messages> {
 
     let mut tab_row: Row<Messages, iced::Theme, Renderer> = row![];
 
-    for tab in editor.open_tabs.iter() {
+    for tab in editor.open_tabs {
         tab_row = tab_row.push(button(text(tab.file_name.clone())))
     }
 
@@ -259,17 +338,25 @@ fn view(editor: &Editor) -> Element<Messages> {
     }
 }
 
-async fn load_file(path: PathBuf) -> Result<(PathBuf, Arc<String>), EditorError> {
+async fn load_file(path: PathBuf) -> Result<(PathBuf, Arc<String>, String, bool), EditorError> {
     let contents = tokio::fs::read_to_string(&path)
         .await
         .map(Arc::new)
         .map_err(|error| error.kind())
         .map_err(EditorError::IO)?;
 
-    Ok((path, contents))
+    let file_name: String = match path.file_name() {
+        Some(x) => match x.to_str() {
+            Some(z) => z.to_string(),
+            None => "Unnamed".to_string(),
+        },
+        None => "Unnamed".to_string(),
+    };
+
+    Ok((path, contents, file_name, false))
 }
 
-async fn pick_file() -> Result<(PathBuf, Arc<String>), EditorError> {
+async fn pick_file() -> Result<(PathBuf, Arc<String>, String, bool), EditorError> {
     let file_path = rfd::AsyncFileDialog::new()
         .set_title("Choose a text file...")
         .pick_file()
