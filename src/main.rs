@@ -1,9 +1,8 @@
 use iced::{
     Alignment::Center,
-    Application, Theme,
-    advanced::{graphics::text::cosmic_text::Edit, widget::Text},
+    advanced::widget::Text,
     alignment::Horizontal::Left,
-    highlighter, settings,
+    highlighter,
     widget::{Container, center, mouse_area, opaque, pick_list, stack},
 };
 
@@ -14,7 +13,6 @@ use iced_aw::{
 
 use iced::{
     Color, Element, Font, Length, Renderer, Task, application,
-    highlighter::Highlight,
     widget::{
         Row, button, column, container, horizontal_space, row, text, text_editor,
         text_editor::Content,
@@ -25,8 +23,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{ffi, io};
 
-struct Editor {
+struct Tab {
+    file_name: String,
     path: Option<PathBuf>,
+    content: text_editor::Content,
+    has_been_edited: bool,
+    is_new: bool,
+}
+
+struct Editor {
+    current_tab: Option<Tab>,
+    open_tabs: Vec<Tab>,
+    current_tab_path: Option<PathBuf>,
     content: text_editor::Content,
     editor_theme: iced::Theme,
     highlight_theme: highlighter::Theme,
@@ -39,7 +47,9 @@ struct Editor {
 impl Default for Editor {
     fn default() -> Self {
         Editor {
-            path: None,
+            current_tab: None,
+            open_tabs: Vec::new(),
+            current_tab_path: None,
             content: Content::with_text(""),
             editor_theme: iced::Theme::CatppuccinFrappe,
             highlight_theme: highlighter::Theme::SolarizedDark,
@@ -52,7 +62,7 @@ impl Default for Editor {
 }
 
 impl Editor {
-    fn Theme(&self) -> iced::Theme {
+    fn theme(&self) -> iced::Theme {
         self.editor_theme.clone()
     }
 }
@@ -102,7 +112,7 @@ fn update(state: &mut Editor, message: Messages) -> Task<Messages> {
         Messages::FileOpened(opening_result) => match opening_result {
             Ok((path_buf, new_content)) => {
                 state.content = Content::with_text(&new_content);
-                state.path = Some(path_buf);
+                state.current_tab_path = Some(path_buf);
                 state.current_error = None;
                 state.has_been_edited = false;
                 Task::none()
@@ -133,12 +143,12 @@ fn handle_file_option(state: &mut Editor, file_option: DropdownOptions) -> Task<
     match file_option {
         DropdownOptions::Open => Task::perform(pick_file(), Messages::FileOpened),
         DropdownOptions::Save => Task::perform(
-            save_file(state.path.clone(), state.content.text()),
+            save_file(state.current_tab_path.clone(), state.content.text()),
             Messages::FileSaved,
         ),
         DropdownOptions::New => {
             state.content = Content::with_text("");
-            state.path = None;
+            state.current_tab_path = None;
             Task::none()
         }
     }
@@ -148,7 +158,7 @@ fn view(editor: &Editor) -> Element<Messages> {
     let input = text_editor(&editor.content)
         .highlight(
             editor
-                .path
+                .current_tab_path
                 .as_deref()
                 .and_then(Path::extension)
                 .and_then(ffi::OsStr::to_str)
@@ -179,14 +189,20 @@ fn view(editor: &Editor) -> Element<Messages> {
         )))
     ));
 
-    let controls: Row<Messages, iced::Theme, Renderer> = row![file_bar];
+    let mut tab_row: Row<Messages, iced::Theme, Renderer> = row![];
+
+    editor.open_tabs.iter().for_each(|tab| {
+        tab_row.push(button(text(tab.file_name.clone())));
+    });
+
+    let controls: Row<Messages, iced::Theme, Renderer> = row![file_bar].spacing(5);
 
     let status_bar = {
         let status: Text<'_, iced::Theme, Renderer> =
             if let Some(EditorError::IO(erorkind)) = editor.current_error.as_ref() {
                 text(erorkind.to_string())
             } else {
-                match editor.path.as_deref().and_then(Path::to_str) {
+                match editor.current_tab_path.as_deref().and_then(Path::to_str) {
                     Some(found_path) => text(found_path).size(14),
                     None => text("New File"),
                 }
@@ -236,7 +252,7 @@ fn view(editor: &Editor) -> Element<Messages> {
             .width(Length::Fill)
             .padding(10);
 
-    if (editor.show_settings) {
+    if editor.show_settings {
         modal(contents, settings_container, Messages::ShowModal(false))
     } else {
         contents.into()
@@ -317,7 +333,7 @@ where
 
 fn main() {
     match application("Rust Editor", update, view)
-        .theme(|_s| _s.Theme())
+        .theme(|_s| _s.theme())
         .run()
     {
         Err(ex) => {}
