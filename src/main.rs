@@ -191,11 +191,11 @@ fn view(editor: &Editor) -> Element<Messages> {
 
     let mut tab_row: Row<Messages, iced::Theme, Renderer> = row![];
 
-    editor.open_tabs.iter().for_each(|tab| {
-        tab_row.push(button(text(tab.file_name.clone())));
-    });
+    for tab in editor.open_tabs.iter() {
+        tab_row = tab_row.push(button(text(tab.file_name.clone())))
+    }
 
-    let controls: Row<Messages, iced::Theme, Renderer> = row![file_bar].spacing(5);
+    let controls: Row<Messages, iced::Theme, Renderer> = row![file_bar, tab_row].spacing(5);
 
     let status_bar = {
         let status: Text<'_, iced::Theme, Renderer> =
