@@ -3,7 +3,7 @@ use iced::{
     advanced::widget::Text,
     alignment::Horizontal::Left,
     highlighter,
-    widget::{Container, center, mouse_area, opaque, pick_list, stack},
+    widget::{Column, Container, center, mouse_area, opaque, pick_list, stack},
 };
 
 use iced_aw::{
@@ -43,8 +43,20 @@ impl Tab {
     }
 }
 
+impl Default for Tab {
+    fn default() -> Self {
+        Tab {
+            file_name: "".to_string(),
+            opt_path: None,
+            content: Content::with_text(""),
+            has_been_edited: true,
+            is_new: true,
+        }
+    }
+}
+
 struct Editor {
-    current_tab_path: Option<PathBuf>,
+    current_tab_index: Option<usize>,
     open_tabs: Vec<Tab>,
     editor_theme: iced::Theme,
     highlight_theme: highlighter::Theme,
@@ -56,7 +68,7 @@ struct Editor {
 impl Default for Editor {
     fn default() -> Self {
         Editor {
-            current_tab_path: None,
+            current_tab_index: None,
             open_tabs: Vec::new(),
             editor_theme: iced::Theme::CatppuccinFrappe,
             highlight_theme: highlighter::Theme::SolarizedDark,
@@ -88,44 +100,50 @@ impl Editor {
 
     //This function attempts to update the tab as saved. Failing to find it returns false.
     fn file_saved(&mut self, file_path: PathBuf) -> bool {
-        return false;
+        let mut saved = false;
+        for tab in self.open_tabs.iter_mut() {
+            match tab.opt_path.clone() {
+                Some(tab_path) => {
+                    saved = true;
+                }
+                None => {}
+            }
+        }
+        return saved;
     }
 
-    fn get_current_tab(&mut self) -> Option<&mut Tab> {
-        match self.current_tab_path.clone() {
-            Some(current_tab_path) => {
-                for tab in self.open_tabs.iter_mut() {
-                    if tab
-                        .opt_path
-                        .as_ref()
-                        .is_some_and(|tab_path| *tab_path == current_tab_path)
-                    {
-                        return Some(tab);
+    fn get_current_tab(&mut self) -> &mut Tab {
+        match self.current_tab_index {
+            Some(index) => {
+                match self.open_tabs.get_mut(index) {
+                    Some(tab) => tab,
+                    None => {
+                        //TODO: This is an error, and we need to handle it
+                        panic!("INDEX DID NOT RETREIVE TAB in get current tab");
                     }
                 }
             }
-            None => return None,
+            None => panic!("INDEX DID NOT EXIST, BUT WE ATTEMPTED TO GET A TAB"),
         }
-
-        return None;
     }
 
-    fn open_tab(
-        &mut self,
-        file_path: PathBuf,
-        new_content: Arc<String>,
-        new_file_name: String,
-        is_new_file: bool,
-    ) {
+    fn new_tab(&mut self) {
+        let new_tab = Tab::default();
+
+        self.open_tabs.push(new_tab);
+        self.current_error = None;
+    }
+
+    fn open_tab(&mut self, file_path: PathBuf, new_content: Arc<String>, new_file_name: String) {
         let new_tab = Tab {
-            is_new: is_new_file,
+            is_new: false,
             opt_path: Some(file_path.clone()),
             content: Content::with_text(&new_content),
             file_name: new_file_name,
-            has_been_edited: is_new_file,
+            has_been_edited: false,
         };
         self.open_tabs.push(new_tab);
-        self.current_tab_path = Some(file_path.clone());
+        self.current_tab_index = Some(self.open_tabs.len());
         self.current_error = None;
     }
 }
@@ -158,15 +176,7 @@ enum EditorError {
 fn update(editor: &mut Editor, message: Messages) -> Task<Messages> {
     match message {
         Messages::Edit(edit_action) => {
-            match editor.get_current_tab() {
-                Some(tab) => {
-                    tab.perform_edit(edit_action);
-                    editor.current_error = None;
-                }
-                None => {
-                    //this is fine, we're not really worried about it not having a current tab
-                }
-            }
+            editor.get_current_tab().content.perform(edit_action);
             Task::none()
         }
         Messages::EditorThemeSelected(new_editor_theme) => {
@@ -213,31 +223,67 @@ fn handle_file_option(editor: &mut Editor, file_option: DropdownOptions) -> Task
     match file_option {
         DropdownOptions::Open => Task::perform(pick_file(), Messages::FileOpened),
         DropdownOptions::Save => {
-            match editor.get_current_tab() {
-                Some(tab) => Task::perform(
-                    save_file(tab.opt_path.clone(), tab.content.text()),
-                    Messages::FileSaved,
-                ),
-                None => {
-                    //trying to save without a tab open isn't a sin
-                    Task::none()
-                }
+            if editor.current_tab_index.is_some() {
+                let current_tab_ref = editor.get_current_tab();
+                save_file(
+                    current_tab_ref.opt_path.clone(),
+                    current_tab_ref.content.text(),
+                );
             }
+            Task::none()
         }
         DropdownOptions::New => {
-            editor.open_tab(file_path, new_content, new_file_name, is_new_file);
-            state.content = ;
-            state.current_tab_path = None;
+            editor.new_tab();
             Task::none()
         }
     }
 }
 
 fn view(editor: &Editor) -> Element<Messages> {
+    let mut contents_column: Column<Messages, iced::Theme, Renderer> = column![].spacing(5);
+
+    let settings_container: Container<'_, Messages, iced::Theme, Renderer> = container(
+        column![
+            text("Settings").size(20),
+            row![
+                column![text("Code Highlight Theme:"), text("Editor Theme:")]
+                    .width(225)
+                    .spacing(10)
+                    .align_x(Left),
+                column![
+                    pick_list(
+                        highlighter::Theme::ALL,
+                        Some(editor.highlight_theme),
+                        Messages::HighlighterThemeSelected
+                    ),
+                    pick_list(
+                        iced::Theme::ALL,
+                        Some(editor.editor_theme.clone()),
+                        Messages::EditorThemeSelected
+                    )
+                ]
+                .width(150)
+                .spacing(10)
+                .align_x(Left)
+            ],
+        ]
+        .align_x(Center)
+        .spacing(10),
+    );
+
+    contents_column.push(settings_container);
+
+    match editor.current_tab_index {
+        Some(index) => {}
+        None => {
+            //no tabs are currently open, or... you somehow managed to deselect with tabs open? Seemsbad.
+        }
+    }
+
     let input = text_editor(&editor.content)
         .highlight(
             editor
-                .current_tab_path
+                .current_tab_index
                 .as_deref()
                 .and_then(Path::extension)
                 .and_then(ffi::OsStr::to_str)
@@ -281,7 +327,7 @@ fn view(editor: &Editor) -> Element<Messages> {
             if let Some(EditorError::IO(erorkind)) = editor.current_error.as_ref() {
                 text(erorkind.to_string())
             } else {
-                match editor.current_tab_path.as_deref().and_then(Path::to_str) {
+                match editor.current_tab_index.as_deref().and_then(Path::to_str) {
                     Some(found_path) => text(found_path).size(14),
                     None => text("New File"),
                 }
@@ -296,40 +342,10 @@ fn view(editor: &Editor) -> Element<Messages> {
         row![status, horizontal_space(), position]
     };
 
-    let settings_container: Container<'_, Messages, iced::Theme, Renderer> = container(
-        column![
-            text("Settings").size(20),
-            row![
-                column![text("Code Highlight Theme:"), text("Editor Theme:")]
-                    .width(225)
-                    .spacing(10)
-                    .align_x(Left),
-                column![
-                    pick_list(
-                        highlighter::Theme::ALL,
-                        Some(editor.highlight_theme),
-                        Messages::HighlighterThemeSelected
-                    ),
-                    pick_list(
-                        iced::Theme::ALL,
-                        Some(editor.editor_theme.clone()),
-                        Messages::EditorThemeSelected
-                    )
-                ]
-                .width(150)
-                .spacing(10)
-                .align_x(Left)
-            ],
-        ]
-        .align_x(Center)
-        .spacing(10),
-    );
-
-    let contents: Container<'_, Messages, iced::Theme, Renderer> =
-        container(column![controls, input, status_bar].spacing(5))
-            .height(Length::Fill)
-            .width(Length::Fill)
-            .padding(10);
+    let contents: Container<'_, Messages, iced::Theme, Renderer> = container(contents_column)
+        .height(Length::Fill)
+        .width(Length::Fill)
+        .padding(10);
 
     if editor.show_settings {
         modal(contents, settings_container, Messages::ShowModal(false))
