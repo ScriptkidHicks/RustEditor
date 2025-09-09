@@ -46,7 +46,7 @@ impl Tab {
 impl Default for Tab {
     fn default() -> Self {
         Tab {
-            file_name: "".to_string(),
+            file_name: "Untitlted".to_string(),
             opt_path: None,
             content: Content::with_text(""),
             has_been_edited: true,
@@ -84,18 +84,22 @@ impl Editor {
         self.editor_theme.clone()
     }
 
-    fn file_already_open(&self, file_path: PathBuf) -> bool {
-        for tab in self.open_tabs.iter() {
+    fn file_opened(&mut self, file_path: PathBuf, new_content: Arc<String>, new_file_name: String) {
+        for (index, tab) in self.open_tabs.iter().enumerate() {
             if tab
                 .opt_path
                 .as_ref()
                 .is_some_and(|tab_path| *tab_path == file_path)
             {
-                return true;
+                //already open, so lets move to that tab
+                self.current_tab_index = Some(index);
+                return;
             }
         }
 
-        return false;
+        //we havent found it, so lets build it
+        self.open_tab(file_path, new_content, new_file_name);
+        return;
     }
 
     //This function attempts to update the tab as saved. Failing to find it returns false.
@@ -168,6 +172,7 @@ enum DropdownOptions {
     Open,
     Save,
     New,
+    None,
 }
 
 #[derive(Debug, Clone)]
@@ -209,7 +214,7 @@ fn update(editor: &mut Editor, message: Messages) -> Task<Messages> {
         Messages::MenuOption(dropdown_option) => handle_file_option(editor, dropdown_option),
         Messages::FileOpened(opening_result) => match opening_result {
             Ok((path_buf, new_content, new_file_name)) => {
-                editor.open_tab(path_buf, new_content, new_file_name);
+                editor.file_opened(path_buf.clone(), new_content, new_file_name);
                 Task::none()
             }
             Err(editor_error) => {
@@ -251,17 +256,23 @@ fn handle_file_option(editor: &mut Editor, file_option: DropdownOptions) -> Task
         DropdownOptions::Save => {
             if editor.current_tab_index.is_some() {
                 let current_tab_ref = editor.get_current_tab();
-                save_file(
-                    current_tab_ref.opt_path.clone(),
-                    current_tab_ref.content.text(),
-                );
+                Task::perform(
+                    save_file(
+                        current_tab_ref.opt_path.clone(),
+                        current_tab_ref.content.text(),
+                    ),
+                    Messages::FileSaved,
+                )
+            } else {
+                //listen, I can't stop you from trying to save on nothing, but why are you doing that?
+                Task::none()
             }
-            Task::none()
         }
         DropdownOptions::New => {
             editor.new_tab();
             Task::none()
         }
+        DropdownOptions::None => Task::none(),
     }
 }
 
@@ -271,7 +282,7 @@ fn view(editor: &Editor) -> Element<Messages> {
     let menu_template = |items| Menu::new(items).max_width(180.0).offset(6.0).spacing(0);
 
     let file_bar: MenuBar<'_, Messages, iced::Theme, iced::Renderer> = menu_bar!((
-        button("File"),
+        button("File").on_press(Messages::MenuOption(DropdownOptions::None)),
         menu_template(menu_items!((button("New")
             .width(Length::Fill)
             .on_press(Messages::MenuOption(DropdownOptions::New)))(
