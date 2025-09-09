@@ -1,6 +1,6 @@
 use iced::{
     Alignment::Center,
-    advanced::widget::Text,
+    advanced::{graphics::text::cosmic_text::Placement, widget::Text},
     alignment::Horizontal::Left,
     highlighter,
     widget::{Column, Container, center, mouse_area, opaque, pick_list, stack},
@@ -112,7 +112,22 @@ impl Editor {
         return saved;
     }
 
-    fn get_current_tab(&mut self) -> &mut Tab {
+    fn get_current_tab(&self) -> &Tab {
+        match self.current_tab_index {
+            Some(index) => {
+                match self.open_tabs.get(index) {
+                    Some(tab) => tab,
+                    None => {
+                        //TODO: This is an error, and we need to handle it
+                        panic!("INDEX DID NOT RETREIVE TAB in get current tab");
+                    }
+                }
+            }
+            None => panic!("INDEX DID NOT EXIST, BUT WE ATTEMPTED TO GET A TAB"),
+        }
+    }
+
+    fn get_current_tab_mutable(&mut self) -> &mut Tab {
         match self.current_tab_index {
             Some(index) => {
                 match self.open_tabs.get_mut(index) {
@@ -143,7 +158,7 @@ impl Editor {
             has_been_edited: false,
         };
         self.open_tabs.push(new_tab);
-        self.current_tab_index = Some(self.open_tabs.len());
+        self.current_tab_index = Some(self.open_tabs.len() - 1);
         self.current_error = None;
     }
 }
@@ -159,11 +174,12 @@ enum DropdownOptions {
 enum Messages {
     Edit(text_editor::Action),
     MenuOption(DropdownOptions),
-    FileOpened(Result<(PathBuf, Arc<String>, String, bool), EditorError>),
+    FileOpened(Result<(PathBuf, Arc<String>, String), EditorError>),
     FileSaved(Result<PathBuf, EditorError>),
     HighlighterThemeSelected(highlighter::Theme),
     EditorThemeSelected(iced::Theme),
     ShowModal(bool),
+    IndexUpdated(Option<usize>),
 }
 
 #[derive(Debug, Clone)]
@@ -176,7 +192,10 @@ enum EditorError {
 fn update(editor: &mut Editor, message: Messages) -> Task<Messages> {
     match message {
         Messages::Edit(edit_action) => {
-            editor.get_current_tab().content.perform(edit_action);
+            editor
+                .get_current_tab_mutable()
+                .content
+                .perform(edit_action);
             Task::none()
         }
         Messages::EditorThemeSelected(new_editor_theme) => {
@@ -189,7 +208,10 @@ fn update(editor: &mut Editor, message: Messages) -> Task<Messages> {
         }
         Messages::MenuOption(dropdown_option) => handle_file_option(editor, dropdown_option),
         Messages::FileOpened(opening_result) => match opening_result {
-            Ok((path_buf, new_content, new_file_name, is_new_file)) => Task::none(),
+            Ok((path_buf, new_content, new_file_name)) => {
+                editor.open_tab(path_buf, new_content, new_file_name);
+                Task::none()
+            }
             Err(editor_error) => {
                 editor.current_error = Some(editor_error);
                 Task::none()
@@ -214,6 +236,10 @@ fn update(editor: &mut Editor, message: Messages) -> Task<Messages> {
         },
         Messages::HighlighterThemeSelected(file_theme) => {
             editor.highlight_theme = file_theme;
+            Task::none()
+        }
+        Messages::IndexUpdated(opt_index) => {
+            editor.current_tab_index = opt_index;
             Task::none()
         }
     }
@@ -241,6 +267,39 @@ fn handle_file_option(editor: &mut Editor, file_option: DropdownOptions) -> Task
 
 fn view(editor: &Editor) -> Element<Messages> {
     let mut contents_column: Column<Messages, iced::Theme, Renderer> = column![].spacing(5);
+
+    let menu_template = |items| Menu::new(items).max_width(180.0).offset(6.0).spacing(0);
+
+    let file_bar: MenuBar<'_, Messages, iced::Theme, iced::Renderer> = menu_bar!((
+        button("File"),
+        menu_template(menu_items!((button("New")
+            .width(Length::Fill)
+            .on_press(Messages::MenuOption(DropdownOptions::New)))(
+            button("Open")
+                .width(Length::Fill)
+                .on_press(Messages::MenuOption(DropdownOptions::Open))
+        )(
+            button("Save")
+                .width(Length::Fill)
+                .on_press(Messages::MenuOption(DropdownOptions::Save))
+        )(
+            button("settings")
+                .width(Length::Fill)
+                .on_press(Messages::ShowModal(true))
+        )))
+    ));
+
+    let mut tab_row: Row<Messages, iced::Theme, Renderer> = row![].spacing(2);
+
+    for (index, tab) in editor.open_tabs.iter().enumerate() {
+        tab_row = tab_row.push(
+            button(text(tab.file_name.clone())).on_press(Messages::IndexUpdated(Some(index))),
+        );
+    }
+
+    let controls: Row<Messages, iced::Theme, Renderer> = row![file_bar, tab_row].spacing(5);
+
+    contents_column = contents_column.push(controls);
 
     let settings_container: Container<'_, Messages, iced::Theme, Renderer> = container(
         column![
@@ -271,76 +330,50 @@ fn view(editor: &Editor) -> Element<Messages> {
         .spacing(10),
     );
 
-    contents_column.push(settings_container);
-
     match editor.current_tab_index {
-        Some(index) => {}
-        None => {
-            //no tabs are currently open, or... you somehow managed to deselect with tabs open? Seemsbad.
-        }
-    }
+        Some(index) => {
+            let current_tab: &Tab = editor.get_current_tab();
 
-    let input = text_editor(&editor.content)
-        .highlight(
-            editor
-                .current_tab_index
-                .as_deref()
-                .and_then(Path::extension)
-                .and_then(ffi::OsStr::to_str)
-                .unwrap_or("rs"),
-            editor.highlight_theme,
-        )
-        .on_action(Messages::Edit)
-        .height(Length::Fill);
+            let input = text_editor(&current_tab.content)
+                .highlight(
+                    current_tab
+                        .opt_path
+                        .as_deref()
+                        .and_then(Path::extension)
+                        .and_then(ffi::OsStr::to_str)
+                        .unwrap_or("rs"),
+                    editor.highlight_theme,
+                )
+                .on_action(Messages::Edit)
+                .height(Length::Fill);
 
-    let menu_template = |items| Menu::new(items).max_width(180.0).offset(6.0).spacing(0);
+            let status_bar: Row<Messages, iced::Theme, Renderer> = {
+                let status: Text<'_, iced::Theme, Renderer> =
+                    if let Some(EditorError::IO(erorkind)) = editor.current_error.as_ref() {
+                        text(erorkind.to_string())
+                    } else {
+                        match current_tab.opt_path.as_deref().and_then(Path::to_str) {
+                            Some(found_path) => text(found_path).size(14),
+                            None => text("New File"),
+                        }
+                    };
 
-    let file_bar: MenuBar<'_, Messages, iced::Theme, iced::Renderer> = menu_bar!((
-        button("File"),
-        menu_template(menu_items!((button("New")
-            .width(Length::Fill)
-            .on_press(Messages::MenuOption(DropdownOptions::New)))(
-            button("Open")
-                .width(Length::Fill)
-                .on_press(Messages::MenuOption(DropdownOptions::Open))
-        )(
-            button("Save")
-                .width(Length::Fill)
-                .on_press(Messages::MenuOption(DropdownOptions::Save))
-        )(
-            button("settings")
-                .width(Length::Fill)
-                .on_press(Messages::ShowModal(true))
-        )))
-    ));
+                let position = {
+                    let (line, column) = current_tab.content.cursor_position();
 
-    let mut tab_row: Row<Messages, iced::Theme, Renderer> = row![];
+                    text(format!("{}:{}", line + 1, column + 1))
+                };
 
-    for tab in editor.open_tabs {
-        tab_row = tab_row.push(button(text(tab.file_name.clone())))
-    }
-
-    let controls: Row<Messages, iced::Theme, Renderer> = row![file_bar, tab_row].spacing(5);
-
-    let status_bar = {
-        let status: Text<'_, iced::Theme, Renderer> =
-            if let Some(EditorError::IO(erorkind)) = editor.current_error.as_ref() {
-                text(erorkind.to_string())
-            } else {
-                match editor.current_tab_index.as_deref().and_then(Path::to_str) {
-                    Some(found_path) => text(found_path).size(14),
-                    None => text("New File"),
-                }
+                row![status, horizontal_space(), position]
             };
 
-        let position = {
-            let (line, column) = editor.content.cursor_position();
-
-            text(format!("{}:{}", line + 1, column + 1))
-        };
-
-        row![status, horizontal_space(), position]
-    };
+            contents_column = contents_column.push(input);
+            contents_column = contents_column.push(status_bar);
+        }
+        None => {
+            //no tabs are currently open, or... you somehow managed to deselect with tabs open? Seemsbadman.
+        }
+    }
 
     let contents: Container<'_, Messages, iced::Theme, Renderer> = container(contents_column)
         .height(Length::Fill)
@@ -354,7 +387,7 @@ fn view(editor: &Editor) -> Element<Messages> {
     }
 }
 
-async fn load_file(path: PathBuf) -> Result<(PathBuf, Arc<String>, String, bool), EditorError> {
+async fn load_file(path: PathBuf) -> Result<(PathBuf, Arc<String>, String), EditorError> {
     let contents = tokio::fs::read_to_string(&path)
         .await
         .map(Arc::new)
@@ -369,10 +402,10 @@ async fn load_file(path: PathBuf) -> Result<(PathBuf, Arc<String>, String, bool)
         None => "Unnamed".to_string(),
     };
 
-    Ok((path, contents, file_name, false))
+    Ok((path, contents, file_name))
 }
 
-async fn pick_file() -> Result<(PathBuf, Arc<String>, String, bool), EditorError> {
+async fn pick_file() -> Result<(PathBuf, Arc<String>, String), EditorError> {
     let file_path = rfd::AsyncFileDialog::new()
         .set_title("Choose a text file...")
         .pick_file()
