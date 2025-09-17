@@ -1,13 +1,20 @@
+mod tabs;
+
+use crate::tabs::Tab;
+
+use iced::{task, window};
+
 use iced::{
     Alignment::Center,
-    advanced::{graphics::text::cosmic_text::Placement, widget::Text},
+    advanced::widget::Text,
     alignment::Horizontal::Left,
+    futures::io::Close,
     highlighter,
     widget::{Column, Container, center, mouse_area, opaque, pick_list, stack},
 };
 
 use iced_aw::{
-    menu, menu_bar, menu_items,
+    menu_bar, menu_items,
     widget::menu::{Item, Menu, MenuBar},
 };
 
@@ -22,38 +29,6 @@ use iced::{
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{ffi, io};
-
-struct Tab {
-    file_name: String,
-    opt_path: Option<PathBuf>,
-    content: text_editor::Content,
-    has_been_edited: bool,
-    is_new: bool,
-}
-
-impl Tab {
-    fn file_saved(&mut self) {
-        self.has_been_edited = false;
-        self.is_new = false;
-    }
-
-    fn perform_edit(&mut self, action: text_editor::Action) {
-        self.content.perform(action);
-        self.has_been_edited = true;
-    }
-}
-
-impl Default for Tab {
-    fn default() -> Self {
-        Tab {
-            file_name: "Untitlted".to_string(),
-            opt_path: None,
-            content: Content::with_text(""),
-            has_been_edited: true,
-            is_new: true,
-        }
-    }
-}
 
 struct Editor {
     current_tab_index: Option<usize>,
@@ -107,7 +82,7 @@ impl Editor {
         let mut saved = false;
         for tab in self.open_tabs.iter_mut() {
             match tab.opt_path.clone() {
-                Some(tab_path) => {
+                Some(_) => {
                     saved = true;
                 }
                 None => {}
@@ -173,6 +148,7 @@ enum DropdownOptions {
     Save,
     New,
     None,
+    Close,
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +161,7 @@ enum Messages {
     EditorThemeSelected(iced::Theme),
     ShowModal(bool),
     IndexUpdated(Option<usize>),
+    CloseEditor(Result<bool, EditorError>),
 }
 
 #[derive(Debug, Clone)]
@@ -247,6 +224,19 @@ fn update(editor: &mut Editor, message: Messages) -> Task<Messages> {
             editor.current_tab_index = opt_index;
             Task::none()
         }
+        Messages::CloseEditor(result) => match result {
+            Ok(should_close) => {
+                if (should_close) {
+                    iced::exit()
+                } else {
+                    Task::none()
+                }
+            }
+            Err(e) => {
+                editor.current_error = Some(e);
+                Task::none()
+            }
+        },
     }
 }
 
@@ -272,6 +262,7 @@ fn handle_file_option(editor: &mut Editor, file_option: DropdownOptions) -> Task
             editor.new_tab();
             Task::none()
         }
+        DropdownOptions::Close => Task::perform(close_editor(), Messages::CloseEditor),
         DropdownOptions::None => Task::none(),
     }
 }
@@ -297,6 +288,10 @@ fn view(editor: &Editor) -> Element<Messages> {
             button("settings")
                 .width(Length::Fill)
                 .on_press(Messages::ShowModal(true))
+        )(
+            button("Exit")
+                .width(Length::Fill)
+                .on_press(Messages::MenuOption(DropdownOptions::Close))
         )))
     ));
 
@@ -424,6 +419,10 @@ async fn pick_file() -> Result<(PathBuf, Arc<String>, String), EditorError> {
         .ok_or(EditorError::DialogClosed)?;
 
     load_file(file_path.path().to_owned()).await
+}
+
+async fn close_editor() -> Result<bool, EditorError> {
+    Ok(true)
 }
 
 async fn save_file(opt_path: Option<PathBuf>, text: String) -> Result<PathBuf, EditorError> {
