@@ -20,6 +20,13 @@ impl Tab {
         self.content.perform(action);
         self.has_been_edited = true;
     }
+
+    pub fn is_path(&self, path_in_question: PathBuf) -> bool {
+        match self.opt_path.clone() {
+            Some(self_path) => self_path == path_in_question,
+            None => false,
+        }
+    }
 }
 
 impl Default for Tab {

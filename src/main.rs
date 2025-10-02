@@ -1,14 +1,12 @@
 mod tabs;
 
-use crate::tabs::Tab;
-
-use iced::{task, window};
+use crate::tabs::tabgroups::*;
+use crate::tabs::tabs::Tab;
 
 use iced::{
     Alignment::Center,
     advanced::widget::Text,
     alignment::Horizontal::Left,
-    futures::io::Close,
     highlighter,
     widget::{Column, Container, center, mouse_area, opaque, pick_list, stack},
 };
@@ -31,8 +29,8 @@ use std::sync::Arc;
 use std::{ffi, io};
 
 struct Editor {
-    current_tab_index: Option<usize>,
-    open_tabs: Vec<Tab>,
+    opt_current_tab_group_index: Option<usize>,
+    open_tabs: Vec<TabGroup>,
     editor_theme: iced::Theme,
     highlight_theme: highlighter::Theme,
     font: Font,
@@ -43,7 +41,7 @@ struct Editor {
 impl Default for Editor {
     fn default() -> Self {
         Editor {
-            current_tab_index: None,
+            opt_current_tab_group_index: None,
             open_tabs: Vec::new(),
             editor_theme: iced::Theme::CatppuccinFrappe,
             highlight_theme: highlighter::Theme::SolarizedDark,
@@ -60,15 +58,15 @@ impl Editor {
     }
 
     fn file_opened(&mut self, file_path: PathBuf, new_content: Arc<String>, new_file_name: String) {
-        for (index, tab) in self.open_tabs.iter().enumerate() {
-            if tab
-                .opt_path
-                .as_ref()
-                .is_some_and(|tab_path| *tab_path == file_path)
-            {
-                //already open, so lets move to that tab
-                self.current_tab_index = Some(index);
-                return;
+        for (index, tabgroup) in self.open_tabs.iter().enumerate() {
+            match tabgroup.containing_file_index(file_path) {
+                Some(tab_sub_index) => {
+                    self.opt_current_tab_group_index = {
+                        Some(index);
+                        return;
+                    }
+                }
+                None => {}
             }
         }
 
@@ -92,7 +90,7 @@ impl Editor {
     }
 
     fn get_current_tab(&self) -> &Tab {
-        match self.current_tab_index {
+        match self.opt_current_tab_group_index {
             Some(index) => {
                 match self.open_tabs.get(index) {
                     Some(tab) => tab,
@@ -107,7 +105,7 @@ impl Editor {
     }
 
     fn get_current_tab_mutable(&mut self) -> &mut Tab {
-        match self.current_tab_index {
+        match self.opt_current_tab_group_index {
             Some(index) => {
                 match self.open_tabs.get_mut(index) {
                     Some(tab) => tab,
@@ -137,7 +135,7 @@ impl Editor {
             has_been_edited: false,
         };
         self.open_tabs.push(new_tab);
-        self.current_tab_index = Some(self.open_tabs.len() - 1);
+        self.opt_current_tab_group_index = Some(self.open_tabs.len() - 1);
         self.current_error = None;
     }
 }
@@ -221,7 +219,7 @@ fn update(editor: &mut Editor, message: Messages) -> Task<Messages> {
             Task::none()
         }
         Messages::IndexUpdated(opt_index) => {
-            editor.current_tab_index = opt_index;
+            editor.opt_current_tab_group_index = opt_index;
             Task::none()
         }
         Messages::CloseEditor(result) => match result {
@@ -244,7 +242,7 @@ fn handle_file_option(editor: &mut Editor, file_option: DropdownOptions) -> Task
     match file_option {
         DropdownOptions::Open => Task::perform(pick_file(), Messages::FileOpened),
         DropdownOptions::Save => {
-            if editor.current_tab_index.is_some() {
+            if editor.opt_current_tab_group_index.is_some() {
                 let current_tab_ref = editor.get_current_tab();
                 Task::perform(
                     save_file(
@@ -336,7 +334,7 @@ fn view(editor: &Editor) -> Element<Messages> {
         .spacing(10),
     );
 
-    match editor.current_tab_index {
+    match editor.opt_current_tab_group_index {
         Some(index) => {
             let current_tab: &Tab = editor.get_current_tab();
 
