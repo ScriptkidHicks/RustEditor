@@ -59,7 +59,7 @@ impl Editor {
 
     fn file_opened(&mut self, file_path: PathBuf, new_content: Arc<String>, new_file_name: String) {
         for (index, tabgroup) in self.open_tabs.iter().enumerate() {
-            match tabgroup.containing_file_index(file_path) {
+            match tabgroup.containing_file_index(file_path.clone()) {
                 Some(tab_sub_index) => {
                     self.opt_current_tab_group_index = {
                         Some(index);
@@ -79,8 +79,9 @@ impl Editor {
     fn file_saved(&mut self, file_path: PathBuf) -> bool {
         let mut saved = false;
         for tab in self.open_tabs.iter_mut() {
-            match tab.opt_path.clone() {
-                Some(_) => {
+            match tab.get_opt_head_tab_mut() {
+                Some(tab) => {
+                    tab.has_been_edited = false;
                     saved = true;
                 }
                 None => {}
@@ -93,7 +94,10 @@ impl Editor {
         match self.opt_current_tab_group_index {
             Some(index) => {
                 match self.open_tabs.get(index) {
-                    Some(tab) => tab,
+                    Some(tabgroup) => match tabgroup.get_opt_head_tab() {
+                        Some(tab) => &tab,
+                        None => panic!("Tabgroup did not contain tab"), // fix this when opening new tab with new file
+                    },
                     None => {
                         //TODO: This is an error, and we need to handle it
                         panic!("INDEX DID NOT RETREIVE TAB in get current tab");
@@ -108,7 +112,12 @@ impl Editor {
         match self.opt_current_tab_group_index {
             Some(index) => {
                 match self.open_tabs.get_mut(index) {
-                    Some(tab) => tab,
+                    Some(tabgroup) => match tabgroup.get_opt_head_tab_mut() {
+                        Some(tab) => tab,
+                        None => {
+                            panic!("Tabgroup managed to not have a tab");
+                        }
+                    },
                     None => {
                         //TODO: This is an error, and we need to handle it
                         panic!("INDEX DID NOT RETREIVE TAB in get current tab");
@@ -120,7 +129,7 @@ impl Editor {
     }
 
     fn new_tab(&mut self) {
-        let new_tab = Tab::default();
+        let new_tab = TabGroup::default();
 
         self.open_tabs.push(new_tab);
         self.current_error = None;
@@ -134,7 +143,12 @@ impl Editor {
             file_name: new_file_name,
             has_been_edited: false,
         };
-        self.open_tabs.push(new_tab);
+        self.open_tabs
+            .push(TabGroup::create_tabgroup_with_single_tab(
+                new_tab,
+                self.open_tabs.len(),
+                None,
+            ));
         self.opt_current_tab_group_index = Some(self.open_tabs.len() - 1);
         self.current_error = None;
     }
@@ -295,9 +309,10 @@ fn view(editor: &Editor) -> Element<Messages> {
 
     let mut tab_row: Row<Messages, iced::Theme, Renderer> = row![].spacing(2);
 
-    for (index, tab) in editor.open_tabs.iter().enumerate() {
+    for (index, tabGroup) in editor.open_tabs.iter().enumerate() {
         tab_row = tab_row.push(
-            button(text(tab.file_name.clone())).on_press(Messages::IndexUpdated(Some(index))),
+            button(text(tabGroup.get_tabgroup_name()))
+                .on_press(Messages::IndexUpdated(Some(index))),
         );
     }
 
