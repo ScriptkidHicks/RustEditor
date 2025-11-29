@@ -73,8 +73,12 @@ impl TabGroup {
 
 impl Default for TabGroup {
     fn default() -> Self {
+        //we have to make an empty tab in it when we create the tab group
+        let tab = Tab::default();
+        let mut tabVec: Vec<Tab> = Vec::new();
+        tabVec.push(tab);
         TabGroup {
-            subtabs: Vec::new(),
+            subtabs: tabVec,
             index: 0,
             optname: None,
         }
